@@ -1,6 +1,7 @@
 package engine;
 
 import javax.swing.JComponent;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -65,6 +66,19 @@ public final class EnginePage extends JComponent {
     public void setPage(String html, String url) {
         baseUrl = url == null ? "" : url;
         long revision = ++pageRevision;
+        // Clear the previous document as soon as navigation starts, not after network/resource
+        // preparation completes. Guard the EDT update so a stale request cannot clear a newer page.
+        Runnable clear = () -> {
+            if (revision != pageRevision) return;
+            document = null;
+            linkHits.clear();
+            contentHeight = DEFAULT_HEIGHT;
+            revalidate();
+            repaint();
+        };
+        if (SwingUtilities.isEventDispatchThread()) clear.run();
+        else SwingUtilities.invokeLater(clear);
+
         SwingWorker<RenderDocument, Void> worker = new SwingWorker<>() {
             @Override protected RenderDocument doInBackground() {
                 Dom.Node root = Dom.parse(html == null ? "" : html);
@@ -123,10 +137,7 @@ public final class EnginePage extends JComponent {
     private void paintChildren(Dom.Node parent, CssEngine css, Flow flow, String inheritedLink) {
         if (parent == null) return;
         for (Dom.Node node : parent.children) {
-            if (node.isText()) {
-                paintText(node.text, flow, inheritedLink);
-                continue;
-            }
+            if (node.isText()) { paintText(node.text, flow, inheritedLink); continue; }
             String tag = node.tag;
             if (isNonVisual(tag)) continue;
             CssEngine.Style style = css.compute(node);
@@ -142,12 +153,13 @@ public final class EnginePage extends JComponent {
             }
             if (tag.equals("img")) { paintImagePlaceholder(node, flow, style); continue; }
             if (tag.equals("input") || tag.equals("button") || tag.equals("textarea") || tag.equals("select")) {
-                paintControl(node, css, flow, style, inheritedLink);
+                paintControl(node, flow, style);
                 continue;
             }
 
-            boolean block = display.equals("block") || display.equals("list-item")
-                    || display.equals("flex") || display.equals("grid") || display.equals("table");
+            boolean flex = display.equals("flex") || display.equals("inline-flex");
+            boolean grid = display.equals("grid") || display.equals("inline-grid");
+            boolean block = display.equals("block") || display.equals("list-item") || display.equals("table") || flex || grid;
             if (block && flow.hasText) flow.newLine();
             int marginTop = style.px("margin-top", style.px("margin", block ? 4 : 0));
             int marginBottom = style.px("margin-bottom", style.px("margin", block ? 4 : 0));
@@ -159,7 +171,6 @@ public final class EnginePage extends JComponent {
             int paddingRight = style.px("padding-right", style.px("padding", 0));
             flow.y += marginTop;
             int oldLeft = flow.left, oldWidth = flow.width;
-            int oldX = flow.x;
             int boxX = block ? oldLeft + marginLeft : flow.x;
             int available = Math.max(MIN_TEXT_WIDTH, oldWidth - marginLeft - marginRight);
             int specifiedWidth = style.px("width", -1);
@@ -171,7 +182,6 @@ public final class EnginePage extends JComponent {
             flow.g.setFont(fontFor(style, oldFont));
             flow.g.setColor(style.color("color", oldColor));
             String link = tag.equals("a") ? resolve(node.attr("href")) : inheritedLink;
-
             Color background = style.color("background-color", style.color("background", null));
             int declaredHeight = style.px("height", -1);
             if (background != null && background.getAlpha() > 0 && declaredHeight > 0) {
@@ -183,12 +193,11 @@ public final class EnginePage extends JComponent {
                 flow.width = Math.max(MIN_TEXT_WIDTH, boxWidth - paddingLeft - paddingRight);
                 flow.x = flow.left;
                 flow.y += paddingTop;
-                if (display.equals("flex") || display.equals("grid")) {
-                    paintFlexChildren(node, css, flow, link, style);
-                } else paintChildren(node, css, flow, link);
+                if (flex || grid) paintFlexChildren(node, css, flow, link, style);
+                else paintChildren(node, css, flow, link);
                 if (flow.hasText) flow.newLine();
-                int contentHeight = Math.max(0, flow.y - startY - paddingTop);
-                int boxHeight = Math.max(contentHeight, declaredHeight);
+                int actualHeight = Math.max(0, flow.y - startY - paddingTop);
+                int boxHeight = Math.max(actualHeight, declaredHeight);
                 flow.y = Math.max(flow.y, startY + paddingTop + boxHeight + paddingBottom);
                 paintBoxDecoration(flow.g, style, boxX, startY, boxWidth, boxHeight + paddingTop + paddingBottom);
                 flow.left = oldLeft;
@@ -201,36 +210,52 @@ public final class EnginePage extends JComponent {
                     flow.g.fillRect(flow.x, flow.y, Math.max(8, style.px("width", 0)), Math.max(flow.lineHeight, style.px("height", 0)));
                 }
                 paintChildren(node, css, flow, link);
-                flow.g.setFont(oldFont);
-                flow.g.setColor(oldColor);
-                flow.x = Math.max(flow.x, oldX);
+                flow.x = Math.max(flow.x, flow.left);
             }
             flow.g.setFont(oldFont);
             flow.g.setColor(oldColor);
         }
     }
 
-    /** A simple row layout for flex/grid containers; other display values use normal flow. */
+    /** Render flex/grid children in rows by default, or in a column when requested. */
     private void paintFlexChildren(Dom.Node parent, CssEngine css, Flow flow, String link, CssEngine.Style style) {
         String direction = style.get("flex-direction", "row");
         if (direction.contains("column")) { paintChildren(parent, css, flow, link); return; }
-        int startLeft = flow.left, startWidth = flow.width;
-        int gap = Math.max(0, style.px("gap", style.px("column-gap", 0)));
-        boolean hadItem = false;
+        int originalLeft = flow.left, originalWidth = flow.width;
+        int gap = Math.max(0, style.px("column-gap", style.px("gap", 0)));
+        boolean first = true;
         for (Dom.Node child : parent.children) {
-            if (!child.isText() && child.tag.equals("#text")) continue;
-            if (child.isText() && child.text.isBlank()) continue;
-            if (hadItem) { flow.left += gap; flow.width = Math.max(1, flow.width - gap); flow.x = flow.left; }
-            paintChildren(new ChildrenView(child), css, flow, link);
-            hadItem = true;
+            if (child.isText()) {
+                if (!child.text.isBlank()) {
+                    if (!first) flow.x += gap;
+                    paintText(child.text, flow, link);
+                    first = false;
+                }
+                continue;
+            }
+            CssEngine.Style childStyle = css.compute(child);
+            String childDisplay = childStyle.get("display", Dom.isBlock(child.tag) ? "block" : "inline");
+            if (childDisplay.equals("none")) continue;
+            if (!first) flow.x += gap;
+            Font previousFont = flow.g.getFont();
+            Color previousColor = flow.g.getColor();
+            flow.g.setFont(fontFor(childStyle, previousFont));
+            flow.g.setColor(childStyle.color("color", previousColor));
+            Color bg = childStyle.color("background-color", childStyle.color("background", null));
+            if (bg != null && bg.getAlpha() > 0) {
+                flow.g.setColor(bg);
+                flow.g.fillRect(flow.x, flow.y, Math.max(24, childStyle.px("width", 24)), Math.max(flow.lineHeight, childStyle.px("height", 24)));
+                flow.g.setColor(childStyle.color("color", previousColor));
+            }
+            paintChildren(child, css, flow, child.tag.equals("a") ? resolve(child.attr("href")) : link);
+            flow.g.setFont(previousFont);
+            flow.g.setColor(previousColor);
+            first = false;
         }
-        flow.left = startLeft; flow.width = startWidth; flow.x = startLeft;
+        flow.left = originalLeft;
+        flow.width = originalWidth;
         if (flow.hasText) flow.newLine();
-    }
-
-    // Paint one node through the same traversal path without creating another DOM wrapper.
-    private static final class ChildrenView extends Dom.Node {
-        ChildrenView(Dom.Node child) { super("#render-fragment"); appendChild(child); }
+        flow.x = flow.left;
     }
 
     private void paintText(String raw, Flow flow, String link) {
@@ -249,11 +274,8 @@ public final class EnginePage extends JComponent {
             boolean hasNext = next < raw.length();
             int wordWidth = metrics.stringWidth(word);
             if (flow.hasText && flow.x + wordWidth > flow.left + flow.width) flow.newLine();
-            if (wordWidth > flow.width && word.length() > 1) {
-                paintLongWord(word, flow, link, metrics);
-            } else {
-                paintRun(word, flow, link, metrics, wordWidth);
-            }
+            if (wordWidth > flow.width && word.length() > 1) paintLongWord(word, flow, link, metrics);
+            else paintRun(word, flow, link, metrics, wordWidth);
             if (hasNext) flow.x += spaceWidth;
             index = next;
         }
@@ -277,8 +299,7 @@ public final class EnginePage extends JComponent {
         Color previous = flow.g.getColor();
         if (link != null) flow.g.setColor(new Color(26, 115, 232));
         flow.g.drawString(text, flow.x, baseline);
-        String decoration = link == null ? "" : "underline";
-        if (decoration.equals("underline") || link != null) flow.g.drawLine(flow.x, baseline + 1, flow.x + width, baseline + 1);
+        if (link != null) flow.g.drawLine(flow.x, baseline + 1, flow.x + width, baseline + 1);
         if (link != null) linkHits.add(new LinkHit(new Rectangle(flow.x, flow.y, width, metrics.getHeight()), link));
         flow.g.setColor(previous);
         flow.x += width;
@@ -286,13 +307,13 @@ public final class EnginePage extends JComponent {
         flow.hasText = true;
     }
 
-    private void paintControl(Dom.Node node, CssEngine css, Flow flow, CssEngine.Style style, String link) {
+    private void paintControl(Dom.Node node, Flow flow, CssEngine.Style style) {
         if (flow.hasText) flow.newLine();
         int width = Math.max(48, style.px("width", parseInt(node.attr("size"), 180)));
         int height = Math.max(24, style.px("height", node.tag.equals("textarea") ? 72 : 30));
         int x = flow.left, y = flow.y;
-        Color fill = style.color("background-color", Color.WHITE);
-        flow.g.setColor(fill); flow.g.fillRoundRect(x, y, width, height, 4, 4);
+        flow.g.setColor(style.color("background-color", Color.WHITE));
+        flow.g.fillRoundRect(x, y, width, height, 4, 4);
         flow.g.setColor(style.color("border-color", new Color(140, 140, 140)));
         flow.g.drawRoundRect(x, y, width, height, 4, 4);
         String value = node.attr("value");
@@ -305,7 +326,9 @@ public final class EnginePage extends JComponent {
             flow.g.setColor(style.color("color", Color.DARK_GRAY));
             flow.g.drawString(value.isBlank() ? node.attr("placeholder") : value, x + 7, y + 19);
         }
-        flow.y += height + 5; flow.x = flow.left; flow.hasText = false;
+        flow.y += height + 5;
+        flow.x = flow.left;
+        flow.hasText = false;
     }
 
     private void paintImagePlaceholder(Dom.Node node, Flow flow, CssEngine.Style style) {
@@ -331,8 +354,7 @@ public final class EnginePage extends JComponent {
         }
     }
     private static Color borderColor(String border) {
-        String[] parts = border.trim().split("\\s+");
-        for (String part : parts) {
+        for (String part : border.trim().split("\\s+")) {
             Color color = CssEngine.parseColor(part, null);
             if (color != null) return color;
         }
