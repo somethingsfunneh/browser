@@ -12,8 +12,12 @@ import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
+import java.awt.Insets;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.net.URI;
@@ -31,10 +35,15 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Swing browser shell; page requests run concurrently away from the event thread. */
+/** Chrome-inspired Swing browser shell with Google as its search provider. */
 public class Browser extends JFrame {
-    private static final String HOME = "https://example.com";
-    private static final String SEARCH = "https://duckduckgo.com/?q=";
+    private static final String HOME = "https://www.google.com";
+    private static final String SEARCH = "https://www.google.com/search?q=";
+    private static final Color CHROME_TOOLBAR = new Color(241, 243, 244);
+    private static final Color CHROME_SURFACE = Color.WHITE;
+    private static final Color CHROME_TEXT = new Color(32, 33, 36);
+    private static final Color CHROME_MUTED = new Color(95, 99, 104);
+    private static final Color CHROME_BLUE = new Color(26, 115, 232);
     private static final int MAX_CONCURRENT_LOADS = Math.max(2,
             Math.min(8, Runtime.getRuntime().availableProcessors()));
 
@@ -49,32 +58,61 @@ public class Browser extends JFrame {
     private final JTabbedPane tabs = new JTabbedPane();
 
     public Browser() {
-        super("Custom Java Browser");
+        super("Browser");
+        applyChromeLookAndFeel();
         setDefaultCloseOperation(EXIT_ON_CLOSE);
-        setSize(1100, 750);
-        setMinimumSize(new Dimension(700, 450));
+        setSize(1200, 800);
+        setMinimumSize(new Dimension(760, 500));
         setLocationRelativeTo(null);
         setLayout(new BorderLayout());
+        getContentPane().setBackground(CHROME_SURFACE);
 
-        JPanel toolbar = new JPanel(new BorderLayout(6, 0));
-        JButton back = new JButton("←");
-        JButton forward = new JButton("→");
-        JButton reload = new JButton("⟳");
-        JButton home = new JButton("Home");
-        JButton addTab = new JButton("+");
-        JButton go = new JButton("Go");
+        JPanel toolbar = new JPanel(new BorderLayout(10, 0));
+        toolbar.setBackground(CHROME_TOOLBAR);
+        toolbar.setBorder(BorderFactory.createEmptyBorder(9, 12, 9, 12));
+
+        JButton back = toolbarButton("‹", "Back");
+        JButton forward = toolbarButton("›", "Forward");
+        JButton reload = toolbarButton("⟳", "Reload");
+        JButton home = toolbarButton("⌂", "Home");
+        JButton addTab = toolbarButton("+", "New tab");
+        JButton go = toolbarButton("Go", "Go to address or search Google");
         JPanel navigation = new JPanel();
+        navigation.setOpaque(false);
+        navigation.setBorder(BorderFactory.createEmptyBorder());
         navigation.add(back);
         navigation.add(forward);
         navigation.add(reload);
         navigation.add(home);
         navigation.add(addTab);
+
+        address.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        address.setForeground(CHROME_TEXT);
+        address.setCaretColor(CHROME_BLUE);
+        address.setBackground(CHROME_SURFACE);
+        address.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(218, 220, 224)),
+                BorderFactory.createEmptyBorder(8, 14, 8, 14)));
+        address.setMargin(new Insets(0, 0, 0, 0));
+        address.setToolTipText("Search Google or enter a web address");
+
         toolbar.add(navigation, BorderLayout.WEST);
         toolbar.add(address, BorderLayout.CENTER);
         toolbar.add(go, BorderLayout.EAST);
+
+        tabs.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        tabs.setBackground(CHROME_TOOLBAR);
+        tabs.setForeground(CHROME_TEXT);
+        tabs.setBorder(BorderFactory.createEmptyBorder());
+        tabs.setFocusable(false);
         add(toolbar, BorderLayout.NORTH);
         add(tabs, BorderLayout.CENTER);
-        status.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+
+        status.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        status.setForeground(CHROME_MUTED);
+        status.setBackground(CHROME_TOOLBAR);
+        status.setOpaque(true);
+        status.setBorder(BorderFactory.createEmptyBorder(5, 12, 5, 12));
         add(status, BorderLayout.SOUTH);
 
         go.addActionListener(e -> navigate(address.getText()));
@@ -108,6 +146,31 @@ public class Browser extends JFrame {
         newTab(HOME);
     }
 
+    private static void applyChromeLookAndFeel() {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception ignored) {
+            // Keep the installed Swing look and feel if the platform theme is unavailable.
+        }
+        UIManager.put("TabbedPane.background", CHROME_TOOLBAR);
+        UIManager.put("TabbedPane.foreground", CHROME_TEXT);
+        UIManager.put("TabbedPane.selected", CHROME_SURFACE);
+        UIManager.put("TabbedPane.contentAreaColor", CHROME_SURFACE);
+        UIManager.put("TabbedPane.focus", new Color(0, 0, 0, 0));
+    }
+
+    private static JButton toolbarButton(String text, String tooltip) {
+        JButton button = new JButton(text);
+        button.setToolTipText(tooltip);
+        button.setFont(new Font("SansSerif", Font.PLAIN, text.length() > 1 ? 12 : 20));
+        button.setForeground(CHROME_MUTED);
+        button.setBackground(CHROME_TOOLBAR);
+        button.setBorder(BorderFactory.createEmptyBorder(5, 9, 5, 9));
+        button.setFocusPainted(false);
+        button.setOpaque(true);
+        return button;
+    }
+
     private void bind(String key, String name, Runnable callback) {
         getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
                 .put(KeyStroke.getKeyStroke(key), name);
@@ -123,6 +186,8 @@ public class Browser extends JFrame {
         PageState state = new PageState(page);
         page.setLinkHandler(this::navigate);
         JScrollPane scroll = new JScrollPane(page);
+        scroll.getViewport().setBackground(CHROME_SURFACE);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
         state.scroll = scroll;
         scroll.putClientProperty("browser.pageState", state);
         tabs.addTab("New Tab", scroll);
