@@ -68,7 +68,7 @@ public final class EnginePage extends JComponent {
         linkHandler = handler == null ? url -> {} : handler;
     }
 
-    /** Parses and prepares a page off the Swing event thread. */
+    /** Parses and prepares a page and its external resources off the Swing event thread. */
     public void setPage(String html, String url) {
         baseUrl = url == null ? "" : url;
         long revision = ++pageRevision;
@@ -76,12 +76,26 @@ public final class EnginePage extends JComponent {
         SwingWorker<RenderDocument, Void> worker = new SwingWorker<>() {
             @Override protected RenderDocument doInBackground() {
                 Dom.Node root = Dom.parse(html == null ? "" : html);
+                ResourceLoader.Budget budget = new ResourceLoader.Budget();
+                String effectiveBase = resolveBaseUrl(root, baseUrl);
                 StringBuilder styles = new StringBuilder();
-                collectStyles(root, styles);
+                collectStyles(root, styles, effectiveBase, budget);
 
-                CssEngine css = new CssEngine(CssPreprocessor.resolve(styles.toString()));
+                int viewportWidth = Math.max(320, getWidth());
+                CssEngine css = new CssEngine(CssPreprocessor.resolve(styles.toString(), viewportWidth));
+                TinyJs scripts = new TinyJs(root);
                 for (Dom.Node script : findAll(root, "script")) {
-                    new TinyJs(root).execute(script.textContent());
+                    String source = script.textContent();
+                    String src = script.attr("src");
+                    if (!src.isBlank()) {
+                        try {
+                            String external = ResourceLoader.fetch(budget, effectiveBase, src);
+                            if (external != null) source = external;
+                        } catch (Exception ignored) {
+                            continue;
+                        }
+                    }
+                    scripts.execute(source);
                 }
                 Dom.Node titleNode = findFirst(root, "title");
                 String title = titleNode == null ? "" : titleNode.textContent().trim();
@@ -159,6 +173,13 @@ public final class EnginePage extends JComponent {
                 flow.newLine();
                 continue;
             }
+            if (tag.equals("hr")) {
+                flow.newLineIfNeeded();
+                flow.g.setColor(style.color("color", Color.LIGHT_GRAY));
+                flow.g.drawLine(flow.left, flow.y + 4, flow.left + flow.width, flow.y + 4);
+                flow.y += 14;
+                continue;
+            }
             if (tag.equals("img")) {
                 paintImagePlaceholder(node, flow, style);
                 continue;
@@ -205,6 +226,10 @@ public final class EnginePage extends JComponent {
                 flow.x = flow.left;
             }
 
+            if (tag.equals("li")) {
+                flow.g.setColor(style.color("color", oldColor));
+                flow.g.drawString("•", Math.max(2, flow.left - 12), flow.y + flow.g.getFontMetrics().getAscent());
+            }
             paintChildren(node, css, flow, effectiveLink);
             if (block && flow.hasText) flow.newLine();
 
@@ -214,7 +239,7 @@ public final class EnginePage extends JComponent {
 
             String border = style.get("border", "");
             if (!border.isBlank() && !border.equalsIgnoreCase("none")) {
-                flow.g.setColor(Color.GRAY);
+                flow.g.setColor(style.color("border-color", Color.GRAY));
                 flow.g.drawRect(boxX, boxStartY, boxWidth,
                         boxHeight + paddingTop + paddingBottom);
             }
@@ -308,6 +333,16 @@ public final class EnginePage extends JComponent {
         }
     }
 
+    private static String resolveBaseUrl(Dom.Node root, String fallback) {
+        Dom.Node base = findFirst(root, "base");
+        if (base == null || base.attr("href").isBlank()) return fallback;
+        try {
+            return URI.create(fallback).resolve(base.attr("href")).toString();
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
     private static Font fontFor(CssEngine.Style style, Font inherited) {
         int size = Math.max(8, Math.min(72,
                 style.px("font-size", inherited.getSize())));
@@ -330,10 +365,21 @@ public final class EnginePage extends JComponent {
         }
     }
 
-    private static void collectStyles(Dom.Node node, StringBuilder out) {
+    private static void collectStyles(Dom.Node node, StringBuilder out, String baseUrl,
+                                      ResourceLoader.Budget budget) {
         if (node == null) return;
-        if (node.tag.equals("style")) out.append(node.textContent()).append('\n');
-        for (Dom.Node child : node.children) collectStyles(child, out);
+        if (node.tag.equals("style")) {
+            out.append(node.textContent()).append('\n');
+        } else if (node.tag.equals("link")
+                && node.attr("rel").toLowerCase(java.util.Locale.ROOT).contains("stylesheet")) {
+            try {
+                String stylesheet = ResourceLoader.fetch(budget, baseUrl, node.attr("href"));
+                if (stylesheet != null) out.append(stylesheet).append('\n');
+            } catch (Exception ignored) {
+                // A failed optional stylesheet must not prevent the document from rendering.
+            }
+        }
+        for (Dom.Node child : node.children) collectStyles(child, out, baseUrl, budget);
     }
 
     private static Dom.Node findFirst(Dom.Node node, String tag) {
