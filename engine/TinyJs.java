@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 /** Isolated, bounded JavaScript-like interpreter used by the rendering worker. */
 public final class TinyJs {
@@ -21,9 +20,10 @@ public final class TinyJs {
 
     public void execute(String source) {
         if (source == null || source.isBlank()) return;
-        if (source.length() > MAX_SOURCE_LENGTH) {
-            throw new IllegalArgumentException("Script exceeds the interpreter size limit");
-        }
+        // Real sites routinely ship multi-megabyte bundles. This interpreter deliberately
+        // supports only a tiny JS subset; skip oversized bundles instead of failing page
+        // preparation and leaving the entire document blank.
+        if (source.length() > MAX_SOURCE_LENGTH) return;
         tokens = tokenize(source);
         cursor = 0;
         steps = 0;
@@ -81,16 +81,12 @@ public final class TinyJs {
         consume(")", "Expected ')' after selector");
         consume(".", "Expected DOM property");
         String property = consumeType(Type.IDENT, "Expected DOM property").text;
-        if (!property.equals("textContent")
-                && !property.equals("innerText")
-                && !property.equals("innerHTML")) {
+        if (!property.equals("textContent") && !property.equals("innerText") && !property.equals("innerHTML")) {
             throw error("Unsupported DOM property");
         }
         consume("=", "Expected assignment to DOM property");
         String value = stringValue(expression());
-        Dom.Node target = method.equals("getElementById")
-                ? document.byId(selector)
-                : document.querySelector(selector);
+        Dom.Node target = method.equals("getElementById") ? document.byId(selector) : document.querySelector(selector);
         if (target != null) {
             if (property.equals("innerHTML")) target.setInnerHTML(value);
             else target.setTextContent(value);
@@ -104,11 +100,8 @@ public final class TinyJs {
         while (match("+", "-")) {
             String op = previous().text;
             Object right = multiplicative();
-            if (op.equals("+") && (left instanceof String || right instanceof String)) {
-                left = stringValue(left) + stringValue(right);
-            } else {
-                left = number(left) + (op.equals("+") ? number(right) : -number(right));
-            }
+            if (op.equals("+") && (left instanceof String || right instanceof String)) left = stringValue(left) + stringValue(right);
+            else left = number(left) + (op.equals("+") ? number(right) : -number(right));
         }
         return left;
     }
@@ -118,9 +111,7 @@ public final class TinyJs {
         while (match("*", "/")) {
             String op = previous().text;
             double right = number(primary());
-            left = op.equals("*")
-                    ? number(left) * right
-                    : (right == 0 ? Double.NaN : number(left) / right);
+            left = op.equals("*") ? number(left) * right : (right == 0 ? Double.NaN : number(left) / right);
         }
         return left;
     }
@@ -159,59 +150,32 @@ public final class TinyJs {
     private static double number(Object value) {
         if (value instanceof Number number) return number.doubleValue();
         if (value instanceof Boolean bool) return bool ? 1 : 0;
-        try {
-            return Double.parseDouble(String.valueOf(value));
-        } catch (Exception ignored) {
-            return Double.NaN;
-        }
+        try { return Double.parseDouble(String.valueOf(value)); }
+        catch (Exception ignored) { return Double.NaN; }
     }
 
     private static String stringValue(Object value) {
         if (value == null) return "null";
-        if (value instanceof Double number && number == Math.rint(number)) {
-            return Long.toString(number.longValue());
-        }
+        if (value instanceof Double number && number == Math.rint(number)) return Long.toString(number.longValue());
         return String.valueOf(value);
     }
 
-    private RuntimeException error(String message) {
-        return new IllegalArgumentException(message + " at token " + cursor);
-    }
-    private boolean atEnd() {
-        return cursor >= tokens.size() || peek().type == Type.END;
-    }
-    private Token peek() {
-        return tokens.get(Math.min(cursor, tokens.size() - 1));
-    }
+    private RuntimeException error(String message) { return new IllegalArgumentException(message + " at token " + cursor); }
+    private boolean atEnd() { return cursor >= tokens.size() || peek().type == Type.END; }
+    private Token peek() { return tokens.get(Math.min(cursor, tokens.size() - 1)); }
     private Token previous() { return tokens.get(cursor - 1); }
-    private Token advance() {
-        if (!atEnd()) cursor++;
-        return previous();
-    }
+    private Token advance() { if (!atEnd()) cursor++; return previous(); }
     private boolean check(String text) { return !atEnd() && peek().text.equals(text); }
-    private boolean checkNext(String text) {
-        return cursor + 1 < tokens.size() && tokens.get(cursor + 1).text.equals(text);
-    }
+    private boolean checkNext(String text) { return cursor + 1 < tokens.size() && tokens.get(cursor + 1).text.equals(text); }
     private boolean checkType(Type type) { return !atEnd() && peek().type == type; }
     private boolean match(String... values) {
         for (String value : values) if (check(value)) { advance(); return true; }
         return false;
     }
-    private boolean matchType(Type type) {
-        if (checkType(type)) { advance(); return true; }
-        return false;
-    }
-    private Token consume(String text, String message) {
-        if (check(text)) return advance();
-        throw error(message);
-    }
-    private Token consumeType(Type type, String message) {
-        if (checkType(type)) return advance();
-        throw error(message);
-    }
-    private void synchronize() {
-        while (!atEnd() && !match(";")) advance();
-    }
+    private boolean matchType(Type type) { if (checkType(type)) { advance(); return true; } return false; }
+    private Token consume(String text, String message) { if (check(text)) return advance(); throw error(message); }
+    private Token consumeType(Type type, String message) { if (checkType(type)) return advance(); throw error(message); }
+    private void synchronize() { while (!atEnd() && !match(";")) advance(); }
 
     private enum Type { IDENT, NUMBER, STRING, SYMBOL, END }
     private record Token(Type type, String text) {}
@@ -241,14 +205,9 @@ public final class TinyJs {
                     if (ch == '\\' && i < source.length()) {
                         char escaped = source.charAt(i++);
                         value.append(switch (escaped) {
-                            case 'n' -> '\n';
-                            case 'r' -> '\r';
-                            case 't' -> '\t';
-                            default -> escaped;
+                            case 'n' -> '\n'; case 'r' -> '\r'; case 't' -> '\t'; default -> escaped;
                         });
-                    } else {
-                        value.append(ch);
-                    }
+                    } else value.append(ch);
                 }
                 if (i < source.length()) i++;
                 result.add(new Token(Type.STRING, value.toString()));
@@ -256,22 +215,14 @@ public final class TinyJs {
             }
             if (Character.isLetter(c) || c == '_' || c == '$') {
                 int start = i++;
-                while (i < source.length()
-                        && (Character.isLetterOrDigit(source.charAt(i))
-                        || source.charAt(i) == '_' || source.charAt(i) == '$')) i++;
+                while (i < source.length() && (Character.isLetterOrDigit(source.charAt(i)) || source.charAt(i) == '_' || source.charAt(i) == '$')) i++;
                 result.add(new Token(Type.IDENT, source.substring(start, i)));
                 continue;
             }
             if (Character.isDigit(c)) {
                 int start = i++;
-                while (i < source.length()
-                        && (Character.isDigit(source.charAt(i)) || source.charAt(i) == '.')) i++;
+                while (i < source.length() && (Character.isDigit(source.charAt(i)) || source.charAt(i) == '.')) i++;
                 result.add(new Token(Type.NUMBER, source.substring(start, i)));
-                continue;
-            }
-            if ("=+-*/().;".indexOf(c) >= 0) {
-                result.add(new Token(Type.SYMBOL, String.valueOf(c)));
-                i++;
                 continue;
             }
             result.add(new Token(Type.SYMBOL, String.valueOf(c)));

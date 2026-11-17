@@ -3,6 +3,7 @@ package engine;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -14,6 +15,9 @@ public final class CssEngine {
     private static final Pattern RULE_PATTERN = Pattern.compile("(?s)([^{}]+)\\{([^{}]*)}");
     private static final Pattern ID_PATTERN = Pattern.compile("#([\\w-]+)");
     private static final Pattern CLASS_PATTERN = Pattern.compile("\\.([\\w-]+)");
+    private static final Pattern PSEUDO_PATTERN = Pattern.compile(
+            ":(first-child|last-child|nth-child\\(([^)]*)\\)|not\\(([^)]*)\\))",
+            Pattern.CASE_INSENSITIVE);
     private static final String INHERITED = " color font-family font-size font-style font-weight line-height text-align white-space ";
 
     public record Style(Map<String, String> values) {
@@ -26,6 +30,7 @@ public final class CssEngine {
                 if (value.endsWith("px")) value = value.substring(0, value.length() - 2).trim();
                 else if (value.endsWith("pt")) value = Double.toString(Double.parseDouble(value.substring(0, value.length() - 2).trim()) * 4.0 / 3.0);
                 else if (value.endsWith("em")) value = Double.toString(Double.parseDouble(value.substring(0, value.length() - 2).trim()) * 16);
+                else if (value.endsWith("rem")) value = Double.toString(Double.parseDouble(value.substring(0, value.length() - 3).trim()) * 16);
                 return (int) Math.round(Double.parseDouble(value));
             } catch (Exception ignored) { return fallback; }
         }
@@ -33,12 +38,15 @@ public final class CssEngine {
     }
 
     private record Rule(String selector, Map<String, String> declarations, int specificity, int order) {}
+    private static final Style EMPTY_STYLE = new Style(Map.of());
     private final List<Rule> rules = new ArrayList<>();
+    // A page is mutated by scripts before CSS is created, then rendered read-only.
+    // Identity keys avoid repeated ancestor traversal and selector matching per paint pass.
+    private final Map<Dom.Node, Style> computedStyles = new IdentityHashMap<>();
 
     public CssEngine(String css) {
         if (css == null || css.isEmpty()) return;
-        String clean = stripComments(css);
-        Matcher matcher = RULE_PATTERN.matcher(clean);
+        Matcher matcher = RULE_PATTERN.matcher(stripComments(css));
         int order = 0;
         while (matcher.find()) {
             String selectorText = matcher.group(1).trim();
@@ -48,11 +56,18 @@ public final class CssEngine {
                 if (!selector.isBlank()) rules.add(new Rule(selector.trim(), declarations, specificity(selector), order++));
             }
         }
+        // Cascade in priority order once, instead of allocating and sorting a match list
+        // for every DOM node.
+        rules.sort((a, b) -> a.specificity != b.specificity
+                ? Integer.compare(a.specificity, b.specificity) : Integer.compare(a.order, b.order));
     }
 
-    /** Computes a node's style, inheriting the standard text properties from its parent. */
+    /** Computes a node's style, memoizing both it and its inherited ancestors. */
     public Style compute(Dom.Node node) {
-        if (node == null || node.isText()) return new Style(Map.of());
+        if (node == null || node.isText()) return EMPTY_STYLE;
+        Style cached = computedStyles.get(node);
+        if (cached != null) return cached;
+
         Map<String, String> inherited = new HashMap<>();
         Dom.Node parent = node.parent;
         if (parent != null && !parent.isText()) {
@@ -62,10 +77,7 @@ public final class CssEngine {
                 if (!value.isEmpty()) inherited.put(property, value);
             }
         }
-        return compute(node, inherited);
-    }
 
-    private Style compute(Dom.Node node, Map<String, String> inherited) {
         Map<String, String> values = new HashMap<>(inherited);
         if (Dom.isBlock(node.tag)) {
             values.put("display", "block");
@@ -80,11 +92,9 @@ public final class CssEngine {
         }
         if (node.tag.equals("pre")) values.put("white-space", "pre");
 
-        List<Rule> matching = new ArrayList<>();
-        for (Rule rule : rules) if (matches(node, rule.selector)) matching.add(rule);
-        matching.sort((a, b) -> a.specificity != b.specificity
-                ? Integer.compare(a.specificity, b.specificity) : Integer.compare(a.order, b.order));
-        for (Rule rule : matching) values.putAll(rule.declarations);
+        for (Rule rule : rules) {
+            if (matches(node, rule.selector)) values.putAll(rule.declarations);
+        }
         values.putAll(parseDeclarations(node.attr("style")));
         expandBoxShorthands(values);
 
@@ -97,7 +107,9 @@ public final class CssEngine {
         values.putIfAbsent("color", "#222222");
         values.putIfAbsent("font-family", "SansSerif");
         values.putIfAbsent("font-size", "16px");
-        return new Style(Map.copyOf(values));
+        Style result = new Style(Map.copyOf(values));
+        computedStyles.put(node, result);
+        return result;
     }
 
     private static void expandBoxShorthands(Map<String, String> values) {
@@ -167,8 +179,7 @@ public final class CssEngine {
     }
 
     private static boolean matches(Dom.Node node, String selector) {
-        List<String> parts = selector.trim().replace(">", " > ").trim().replaceAll("\\s+", " ").lines().toList();
-        String[] tokens = parts.isEmpty() ? new String[0] : parts.get(0).split(" ");
+        String[] tokens = selector.trim().replace(">", " > ").trim().replaceAll("\\s+", " ").split(" ");
         if (tokens.length == 0) return false;
         int i = tokens.length - 1;
         Dom.Node current = node;
@@ -200,7 +211,7 @@ public final class CssEngine {
         String classNames = " " + node.attr("class").trim().replaceAll("\\s+", " ") + " ";
         while (classes.find()) if (!classNames.contains(" " + classes.group(1) + " ")) return false;
 
-        Matcher pseudo = Pattern.compile(":(first-child|last-child|nth-child\\(([^)]*)\\)|not\\(([^)]*)\\))", Pattern.CASE_INSENSITIVE).matcher(s);
+        Matcher pseudo = PSEUDO_PATTERN.matcher(s);
         while (pseudo.find()) {
             String name = pseudo.group(1).toLowerCase(Locale.ROOT);
             if (name.equals("first-child") && elementIndex(node) != 1) return false;
@@ -255,7 +266,6 @@ public final class CssEngine {
     }
 
     private static int count(String text, char ch) { int n = 0; for (int i = 0; i < text.length(); i++) if (text.charAt(i) == ch) n++; return n; }
-
     private static String stripComments(String css) { return css.replaceAll("(?s)/\\*.*?\\*/", ""); }
 
     public static Color parseColor(String raw, Color fallback) {
