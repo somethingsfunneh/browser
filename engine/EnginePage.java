@@ -55,7 +55,7 @@ public final class EnginePage extends JComponent {
         root = Dom.parse(html == null ? "" : html);
         StringBuilder styles = new StringBuilder();
         collectStyles(root, styles);
-        css = new CssEngine(styles.toString());
+        css = new CssEngine(CssPreprocessor.resolve(styles.toString()));
         for (Dom.Node script : findAll(root, "script")) {
             new TinyJs(root).execute(script.textContent());
         }
@@ -190,7 +190,6 @@ public final class EnginePage extends JComponent {
             String word = raw.substring(wordStart, index);
             int wordWidth = metrics.stringWidth(word);
 
-            // Determine whether this token has following collapsed whitespace.
             int next = index;
             while (next < length && Character.isWhitespace(raw.charAt(next))) next++;
             boolean hasFollowingWord = next < length;
