@@ -1,6 +1,8 @@
 package engine;
 
 import javax.swing.JComponent;
+import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
@@ -14,24 +16,40 @@ import java.awt.event.MouseEvent;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-/** Optimized custom renderer for a limited HTML/CSS subset. */
+/** Graphics2D renderer for the browser's limited HTML/CSS subset. */
 public final class EnginePage extends JComponent {
     public interface LinkHandler { void open(String url); }
 
     private static final int DEFAULT_HEIGHT = 600;
     private static final int MIN_TEXT_WIDTH = 32;
 
-    private Dom.Node root;
-    private CssEngine css;
-    private String baseUrl = "";
+    private final ExecutorService preparer;
+    private volatile RenderDocument document;
+    private volatile String baseUrl = "";
     private LinkHandler linkHandler = url -> {};
     private final List<LinkHit> linkHits = new ArrayList<>();
-    private int contentHeight = DEFAULT_HEIGHT;
+    private volatile int contentHeight = DEFAULT_HEIGHT;
+    private long pageRevision;
 
     private record LinkHit(Rectangle bounds, String target) {}
 
+    private record RenderDocument(Dom.Node root, CssEngine css, String title) {}
+
     public EnginePage() {
+        this(Executors.newFixedThreadPool(Math.max(2,
+                Math.min(4, Runtime.getRuntime().availableProcessors())),
+                task -> {
+                    Thread thread = new Thread(task, "engine-page-preparer");
+                    thread.setDaemon(true);
+                    return thread;
+                }));
+    }
+
+    EnginePage(ExecutorService preparer) {
+        this.preparer = preparer;
         setOpaque(true);
         setBackground(Color.WHITE);
         addMouseListener(new MouseAdapter() {
@@ -50,23 +68,50 @@ public final class EnginePage extends JComponent {
         linkHandler = handler == null ? url -> {} : handler;
     }
 
+    /** Parses and prepares a page off the Swing event thread. */
     public void setPage(String html, String url) {
         baseUrl = url == null ? "" : url;
-        root = Dom.parse(html == null ? "" : html);
-        StringBuilder styles = new StringBuilder();
-        collectStyles(root, styles);
-        css = new CssEngine(CssPreprocessor.resolve(styles.toString()));
-        for (Dom.Node script : findAll(root, "script")) {
-            new TinyJs(root).execute(script.textContent());
-        }
-        linkHits.clear();
-        revalidate();
-        repaint();
+        long revision = ++pageRevision;
+
+        SwingWorker<RenderDocument, Void> worker = new SwingWorker<>() {
+            @Override protected RenderDocument doInBackground() {
+                Dom.Node root = Dom.parse(html == null ? "" : html);
+                StringBuilder styles = new StringBuilder();
+                collectStyles(root, styles);
+
+                CssEngine css = new CssEngine(CssPreprocessor.resolve(styles.toString()));
+                for (Dom.Node script : findAll(root, "script")) {
+                    new TinyJs(root).execute(script.textContent());
+                }
+                Dom.Node titleNode = findFirst(root, "title");
+                String title = titleNode == null ? "" : titleNode.textContent().trim();
+                return new RenderDocument(root, css, title);
+            }
+
+            @Override protected void done() {
+                if (revision != pageRevision) return;
+                try {
+                    document = get();
+                    linkHits.clear();
+                    revalidate();
+                    repaint();
+                } catch (Exception ignored) {
+                    document = null;
+                    repaint();
+                }
+            }
+        };
+        preparer.execute(worker);
+    }
+
+    public void dispose() {
+        ++pageRevision;
+        preparer.shutdownNow();
     }
 
     public String pageTitle() {
-        Dom.Node title = findFirst(root, "title");
-        return title == null ? "" : title.textContent().trim();
+        RenderDocument ready = document;
+        return ready == null ? "" : ready.title;
     }
 
     @Override public Dimension getPreferredSize() {
@@ -75,19 +120,25 @@ public final class EnginePage extends JComponent {
 
     @Override protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
-        if (root == null) return;
+        RenderDocument ready = document;
+        if (ready == null) return;
 
         Graphics2D g = (Graphics2D) graphics.create();
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING,
+                RenderingHints.VALUE_RENDER_QUALITY);
         linkHits.clear();
 
         Flow flow = new Flow(g, 16, 12, Math.max(100, getWidth() - 32));
-        paintChildren(root, flow, null);
+        paintChildren(ready.root, ready.css, flow, null);
         contentHeight = Math.max(getHeight(), flow.y + flow.lineHeight + 20);
         g.dispose();
+        revalidate();
     }
 
-    private void paintChildren(Dom.Node parent, Flow flow, String inheritedLink) {
+    private void paintChildren(Dom.Node parent, CssEngine css,
+                               Flow flow, String inheritedLink) {
         if (parent == null || parent.children.isEmpty()) return;
 
         for (Dom.Node node : parent.children) {
@@ -119,11 +170,16 @@ public final class EnginePage extends JComponent {
 
             int margin = style.px("margin", block ? 4 : 0);
             int padding = style.px("padding", 0);
+            int paddingLeft = style.px("padding-left", 0);
+            int paddingRight = style.px("padding-right", 0);
+            int paddingTop = style.px("padding-top", 0);
+            int paddingBottom = style.px("padding-bottom", 0);
             flow.y += margin;
 
             int boxX = flow.left;
-            int contentX = boxX + padding + style.px("padding-left", 0);
-            int boxWidth = Math.max(MIN_TEXT_WIDTH, flow.width - padding * 2);
+            int contentX = boxX + padding + paddingLeft;
+            int boxWidth = Math.max(MIN_TEXT_WIDTH,
+                    flow.width - padding * 2 - paddingLeft - paddingRight);
             int boxStartY = flow.y;
 
             Font oldFont = flow.g.getFont();
@@ -134,7 +190,8 @@ public final class EnginePage extends JComponent {
             Color background = style.color("background-color", style.color("background", null));
             if (background != null && background.getAlpha() > 0) {
                 flow.g.setColor(background);
-                int backgroundHeight = Math.max(24, style.px("height", 24)) + padding * 2;
+                int backgroundHeight = Math.max(24, style.px("height", 24))
+                        + paddingTop + paddingBottom;
                 flow.g.fillRect(boxX, boxStartY, boxWidth, backgroundHeight);
                 flow.g.setColor(style.color("color", oldColor));
             }
@@ -148,7 +205,7 @@ public final class EnginePage extends JComponent {
                 flow.x = flow.left;
             }
 
-            paintChildren(node, flow, effectiveLink);
+            paintChildren(node, css, flow, effectiveLink);
             if (block && flow.hasText) flow.newLine();
 
             int boxHeight = Math.max(20, flow.y - boxStartY);
@@ -158,13 +215,15 @@ public final class EnginePage extends JComponent {
             String border = style.get("border", "");
             if (!border.isBlank() && !border.equalsIgnoreCase("none")) {
                 flow.g.setColor(Color.GRAY);
-                flow.g.drawRect(boxX, boxStartY, boxWidth, boxHeight + padding * 2);
+                flow.g.drawRect(boxX, boxStartY, boxWidth,
+                        boxHeight + paddingTop + paddingBottom);
             }
 
             flow.left = previousLeft;
             flow.width = previousWidth;
             flow.x = flow.left;
-            flow.y = Math.max(flow.y, boxStartY + boxHeight + padding * 2);
+            flow.y = Math.max(flow.y, boxStartY + boxHeight
+                    + paddingTop + paddingBottom);
             flow.g.setFont(oldFont);
             flow.g.setColor(oldColor);
             if (block) flow.newLine();
@@ -172,7 +231,6 @@ public final class EnginePage extends JComponent {
         }
     }
 
-    /** Draws text tokens while preserving a collapsed space between adjacent words. */
     private void paintText(String raw, Flow flow, String link) {
         if (raw == null || raw.isEmpty()) return;
 
@@ -203,7 +261,8 @@ public final class EnginePage extends JComponent {
             if (link != null) {
                 flow.g.setColor(new Color(6, 69, 173));
                 flow.g.drawString(word, flow.x, baseline);
-                flow.g.drawLine(flow.x, baseline + 1, flow.x + wordWidth, baseline + 1);
+                flow.g.drawLine(flow.x, baseline + 1,
+                        flow.x + wordWidth, baseline + 1);
                 linkHits.add(new LinkHit(
                         new Rectangle(flow.x, flow.y, wordWidth, metrics.getHeight()), link));
             } else {
@@ -250,7 +309,8 @@ public final class EnginePage extends JComponent {
     }
 
     private static Font fontFor(CssEngine.Style style, Font inherited) {
-        int size = Math.max(8, Math.min(72, style.px("font-size", inherited.getSize())));
+        int size = Math.max(8, Math.min(72,
+                style.px("font-size", inherited.getSize())));
         int flags = Font.PLAIN;
         if ("bold".equalsIgnoreCase(style.get("font-weight", ""))) flags |= Font.BOLD;
         if ("italic".equalsIgnoreCase(style.get("font-style", ""))) flags |= Font.ITALIC;
