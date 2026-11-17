@@ -16,8 +16,8 @@ final class CssPreprocessor {
     }
 
     static String resolve(String css, int viewportWidth) {
-        if (css == null || css.isEmpty()) return "";
-        String flattened = flatten(css, viewportWidth);
+        if (css == null) css = "";
+        String flattened = flatten(BrowserStyles.css() + "\n" + css, viewportWidth);
         Map<String, String> variables = new LinkedHashMap<>();
         Matcher rules = Pattern.compile("(?s)([^{}]+)\\{([^{}]*)}").matcher(flattened);
         while (rules.find()) {
