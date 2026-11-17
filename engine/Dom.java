@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Thread-safe-for-read, immutable-in-layout HTML document model. */
+/** A mutable HTML document tree for rendering and the supported script subset. */
 public final class Dom {
     private Dom() {}
 
@@ -19,51 +19,87 @@ public final class Dom {
         public Node parent;
         public String text = "";
 
-        public Node(String tag) { this.tag = tag; }
+        public Node(String tag) { this.tag = tag == null ? "div" : tag.toLowerCase(Locale.ROOT); }
         public boolean isText() { return "#text".equals(tag); }
-        public String attr(String name) {
-            return attributes.getOrDefault(name.toLowerCase(Locale.ROOT), "");
+        public String attr(String name) { return attributes.getOrDefault(name.toLowerCase(Locale.ROOT), ""); }
+        public boolean hasAttribute(String name) { return attributes.containsKey(name.toLowerCase(Locale.ROOT)); }
+        public void setAttribute(String name, String value) {
+            if (name != null && !name.isBlank()) attributes.put(name.toLowerCase(Locale.ROOT), value == null ? "" : value);
         }
+        public void removeAttribute(String name) { if (name != null) attributes.remove(name.toLowerCase(Locale.ROOT)); }
         public String textContent() {
             if (isText()) return text;
             StringBuilder result = new StringBuilder();
             for (Node child : children) result.append(child.textContent());
             return result.toString();
         }
+        public String innerHTML() {
+            StringBuilder result = new StringBuilder();
+            for (Node child : children) serialize(child, result);
+            return result.toString();
+        }
         public Node byId(String id) {
-            if (id.equalsIgnoreCase(attr("id"))) return this;
-            for (Node child : children) {
-                Node found = child.byId(id);
-                if (found != null) return found;
-            }
+            if (id != null && id.equals(attr("id"))) return this;
+            for (Node child : children) { Node found = child.byId(id); if (found != null) return found; }
             return null;
         }
         public Node querySelector(String selector) {
-            List<Node> all = new ArrayList<>();
-            collect(this, all);
-            for (Node node : all) if (matches(node, selector)) return node;
-            return null;
+            List<Node> found = querySelectorAll(selector);
+            return found.isEmpty() ? null : found.get(0);
+        }
+        public List<Node> querySelectorAll(String selector) {
+            ArrayList<Node> candidates = new ArrayList<>();
+            collect(this, candidates);
+            ArrayList<Node> result = new ArrayList<>();
+            if (selector == null) return result;
+            for (Node candidate : candidates) {
+                for (String part : selector.split(",")) {
+                    if (matches(candidate, part.trim())) { result.add(candidate); break; }
+                }
+            }
+            return result;
         }
         public void setTextContent(String value) {
-            children.clear();
+            clearChildren();
             Node textNode = new Node("#text");
             textNode.text = value == null ? "" : value;
             textNode.parent = this;
             children.add(textNode);
         }
         public void setInnerHTML(String html) {
-            children.clear();
+            clearChildren();
             Node fragment = parse(html == null ? "" : html);
-            for (Node child : fragment.children) {
-                child.parent = this;
-                children.add(child);
-            }
+            for (Node child : new ArrayList<>(fragment.children)) appendChild(child);
         }
-        public Node appendChild(String name) {
-            Node child = new Node(name);
+        public Node appendChild(String name) { return appendChild(new Node(name)); }
+        public Node appendChild(Node child) {
+            if (child == null || child == this) return child;
+            for (Node current = this; current != null; current = current.parent) if (current == child) return child;
+            if (child.parent != null) child.parent.removeChild(child);
             child.parent = this;
             children.add(child);
             return child;
+        }
+        public Node removeChild(Node child) {
+            if (children.remove(child) && child != null) child.parent = null;
+            return child;
+        }
+        public void remove() { if (parent != null) parent.removeChild(this); }
+        private void clearChildren() { for (Node child : children) child.parent = null; children.clear(); }
+
+        private static void serialize(Node node, StringBuilder out) {
+            if (node.isText()) { out.append(escapeText(node.text)); return; }
+            out.append('<').append(node.tag);
+            for (Map.Entry<String, String> entry : node.attributes.entrySet())
+                out.append(' ').append(entry.getKey()).append("=\"").append(escapeText(entry.getValue()).replace("\"", "&quot;")).append('"');
+            out.append('>');
+            if (!VOID.contains(" " + node.tag + " ")) {
+                for (Node child : node.children) serialize(child, out);
+                out.append("</").append(node.tag).append('>');
+            }
+        }
+        private static String escapeText(String value) {
+            return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
         }
         private static void collect(Node node, List<Node> out) {
             if (node == null) return;
@@ -73,35 +109,42 @@ public final class Dom {
         private static boolean matches(Node node, String selector) {
             if (selector == null || selector.isBlank() || node.isText()) return false;
             String s = selector.trim();
-            if (s.startsWith("#")) return s.substring(1).equalsIgnoreCase(node.attr("id"));
-            if (s.startsWith(".")) return hasClass(node, s.substring(1));
+            if (s.equals("*")) return true;
+            int attrStart = s.indexOf('[');
+            if (attrStart >= 0 && s.endsWith("]")) {
+                String test = s.substring(attrStart + 1, s.length() - 1).trim();
+                int equals = test.indexOf('=');
+                String name = (equals < 0 ? test : test.substring(0, equals)).trim();
+                if (!node.hasAttribute(name)) return false;
+                if (equals >= 0) {
+                    String expected = test.substring(equals + 1).trim().replaceAll("^[\\\"']|[\\\"']$", "");
+                    if (!node.attr(name).equals(expected)) return false;
+                }
+                s = s.substring(0, attrStart);
+            }
             int hash = s.indexOf('#'), dot = s.indexOf('.');
             int split = hash < 0 ? dot : dot < 0 ? hash : Math.min(hash, dot);
             String tag = split < 0 ? s : s.substring(0, split);
             if (!tag.isEmpty() && !tag.equals("*") && !tag.equalsIgnoreCase(node.tag)) return false;
             if (hash >= 0) {
                 int stop = dot > hash ? dot : s.length();
-                if (!s.substring(hash + 1, stop).equalsIgnoreCase(node.attr("id"))) return false;
+                if (!s.substring(hash + 1, stop).equals(node.attr("id"))) return false;
             }
-            if (dot >= 0 && !hasClass(node, s.substring(dot + 1))) return false;
+            if (dot >= 0) for (String name : s.substring(dot + 1).split("\\.")) if (!hasClass(node, name)) return false;
             return true;
         }
         private static boolean hasClass(Node node, String name) {
-            return (" " + node.attr("class").trim().replaceAll("\\s+", " ") + " ")
-                    .contains(" " + name.trim() + " ");
+            return (" " + node.attr("class").trim().replaceAll("\\s+", " ") + " ").contains(" " + name.trim() + " ");
         }
     }
 
     private static final String VOID = " area base br col embed hr img input link meta param source track wbr ";
-
     public static Node parse(String html) {
-        if (html == null || html.isEmpty()) return new Node("document");
-
         Node root = new Node("document");
+        if (html == null || html.isEmpty()) return root;
         Deque<Node> stack = new ArrayDeque<>();
         stack.push(root);
         int i = 0;
-
         while (i < html.length()) {
             if (html.startsWith("<!--", i)) {
                 int end = html.indexOf("-->", i + 4);
@@ -112,105 +155,65 @@ public final class Dom {
             if (html.charAt(i) != '<') {
                 int end = html.indexOf('<', i);
                 if (end < 0) end = html.length();
-                String value = decodeEntities(html.substring(i, end));
-                if (!value.isEmpty()) {
-                    Node text = new Node("#text");
-                    text.text = value;
-                    text.parent = stack.peek();
-                    stack.peek().children.add(text);
-                }
+                appendText(stack.peek(), decodeEntities(html.substring(i, end)));
                 i = end;
                 continue;
             }
-
-            if (html.regionMatches(true, i, "<script", 0, 7)
-                    || html.regionMatches(true, i, "<style", 0, 6)) {
+            if (html.regionMatches(true, i, "<script", 0, 7) || html.regionMatches(true, i, "<style", 0, 6)) {
                 String tag = html.regionMatches(true, i, "<script", 0, 7) ? "script" : "style";
                 int openEnd = html.indexOf('>', i);
                 if (openEnd < 0) break;
                 int close = html.toLowerCase(Locale.ROOT).indexOf("</" + tag, openEnd + 1);
-                Node element = new Node(tag);
-                element.parent = stack.peek();
-                stack.peek().children.add(element);
-                if (close < 0) {
-                    Node text = new Node("#text");
-                    text.text = html.substring(openEnd + 1);
-                    text.parent = element;
-                    element.children.add(text);
-                    break;
-                }
-                Node text = new Node("#text");
-                text.text = html.substring(openEnd + 1, close);
-                text.parent = element;
-                element.children.add(text);
+                Node element = stack.peek().appendChild(new Node(tag));
+                if (close < 0) { appendText(element, html.substring(openEnd + 1)); break; }
+                appendText(element, html.substring(openEnd + 1, close));
                 int closeEnd = html.indexOf('>', close);
                 i = closeEnd < 0 ? html.length() : closeEnd + 1;
                 continue;
             }
-
             int end = tagEnd(html, i + 1);
-            if (end < 0) {
-                appendText(stack.peek(), "<");
-                i++;
-                continue;
-            }
+            if (end < 0) { appendText(stack.peek(), "<"); i++; continue; }
             String token = html.substring(i + 1, end).trim();
             i = end + 1;
             if (token.isEmpty() || token.charAt(0) == '!' || token.charAt(0) == '?') continue;
-
             if (token.charAt(0) == '/') {
                 String name = token.substring(1).trim().split("\\s", 2)[0].toLowerCase(Locale.ROOT);
                 while (stack.size() > 1) if (stack.pop().tag.equals(name)) break;
                 continue;
             }
-
             boolean selfClosing = token.endsWith("/");
             if (selfClosing) token = token.substring(0, token.length() - 1).trim();
             int nameEnd = 0;
             while (nameEnd < token.length() && !Character.isWhitespace(token.charAt(nameEnd))) nameEnd++;
             String name = token.substring(0, nameEnd).toLowerCase(Locale.ROOT);
             if (name.isEmpty()) continue;
-
             if ((name.equals("li") || name.equals("p")) && stack.peek().tag.equals(name)) stack.pop();
-            Node element = new Node(name);
-            element.parent = stack.peek();
-            stack.peek().children.add(element);
+            Node element = stack.peek().appendChild(new Node(name));
             parseAttributes(token.substring(nameEnd), element.attributes);
             if (!selfClosing && !VOID.contains(" " + name + " ")) stack.push(element);
         }
         return root;
     }
-
     private static void appendText(Node node, String value) {
-        Node text = new Node("#text");
-        text.text = value;
-        text.parent = node;
-        node.children.add(text);
+        if (value == null || value.isEmpty()) return;
+        Node text = new Node("#text"); text.text = value; text.parent = node; node.children.add(text);
     }
-
     private static int tagEnd(String value, int start) {
         char quote = 0;
         for (int i = start; i < value.length(); i++) {
             char c = value.charAt(i);
-            if (quote != 0) {
-                if (c == quote) quote = 0;
-            } else if (c == '\'' || c == '"') {
-                quote = c;
-            } else if (c == '>') {
-                return i;
-            }
+            if (quote != 0) { if (c == quote) quote = 0; }
+            else if (c == '\'' || c == '"') quote = c;
+            else if (c == '>') return i;
         }
         return -1;
     }
-
     private static void parseAttributes(String source, Map<String, String> out) {
         int i = 0;
         while (i < source.length()) {
-            while (i < source.length()
-                    && (Character.isWhitespace(source.charAt(i)) || source.charAt(i) == '/')) i++;
+            while (i < source.length() && (Character.isWhitespace(source.charAt(i)) || source.charAt(i) == '/')) i++;
             int start = i;
-            while (i < source.length() && !Character.isWhitespace(source.charAt(i))
-                    && source.charAt(i) != '=' && source.charAt(i) != '/') i++;
+            while (i < source.length() && !Character.isWhitespace(source.charAt(i)) && source.charAt(i) != '=' && source.charAt(i) != '/') i++;
             if (i == start) { i++; continue; }
             String key = source.substring(start, i).toLowerCase(Locale.ROOT);
             while (i < source.length() && Character.isWhitespace(source.charAt(i))) i++;
@@ -219,37 +222,23 @@ public final class Dom {
                 i++;
                 while (i < source.length() && Character.isWhitespace(source.charAt(i))) i++;
                 if (i < source.length() && (source.charAt(i) == '\'' || source.charAt(i) == '"')) {
-                    char quote = source.charAt(i++);
-                    int valueStart = i;
+                    char quote = source.charAt(i++); int valueStart = i;
                     while (i < source.length() && source.charAt(i) != quote) i++;
-                    value = source.substring(valueStart, i);
-                    if (i < source.length()) i++;
-                } else {
-                    int valueStart = i;
-                    while (i < source.length() && !Character.isWhitespace(source.charAt(i))) i++;
-                    value = source.substring(valueStart, i);
-                }
+                    value = source.substring(valueStart, i); if (i < source.length()) i++;
+                } else { int valueStart = i; while (i < source.length() && !Character.isWhitespace(source.charAt(i))) i++; value = source.substring(valueStart, i); }
             }
             out.putIfAbsent(key, decodeEntities(value));
         }
     }
-
     public static String decodeEntities(String text) {
-        return text.replace("&nbsp;", "\u00A0")
-                .replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&#39;", "'")
-                .replace("&apos;", "'");
+        return text.replace("&nbsp;", "\u00a0").replace("&amp;", "&").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&apos;", "'");
     }
-
     public static boolean isBlock(String tag) {
         return switch (tag) {
-            case "address", "article", "aside", "blockquote", "body", "div", "dl",
-                 "fieldset", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
-                 "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
-                 "table", "tbody", "tfoot", "thead", "tr", "ul" -> true;
+            case "address", "article", "aside", "blockquote", "body", "div", "dl", "fieldset", "footer", "form",
+                 "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "pre",
+                 "section", "table", "tbody", "tfoot", "thead", "tr", "ul" -> true;
             default -> false;
         };
     }
