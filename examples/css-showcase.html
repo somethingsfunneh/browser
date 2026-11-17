@@ -1,0 +1,492 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CSS Showcase — Custom Java Browser</title>
+  <style>
+    :root {
+      --ink: #203047;
+      --muted: #64748b;
+      --paper: #f3f6fb;
+      --card: #ffffff;
+      --blue: #2563eb;
+      --deep-blue: #1e3a8a;
+      --teal: #0f766e;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --line: #d7e0ec;
+      --soft-blue: #dbeafe;
+      --soft-teal: #ccfbf1;
+      --soft-green: #dcfce7;
+      --soft-amber: #fef3c7;
+      --soft-red: #fee2e2;
+      --radius: 12px;
+    }
+
+    html {
+      display: block;
+      color: var(--ink);
+      background-color: var(--paper);
+      font-family: SansSerif, Arial, sans-serif;
+      font-size: 16px;
+    }
+
+    body {
+      display: block;
+      color: var(--ink);
+      background-color: var(--paper);
+      margin: 0;
+      padding: 18px;
+    }
+
+    header {
+      display: block;
+      color: #ffffff;
+      background-color: var(--deep-blue);
+      margin: 0 0 18px 0;
+      padding: 18px;
+      border: 2px solid #172554;
+    }
+
+    header .eyebrow {
+      display: block;
+      color: #bfdbfe;
+      font-size: 12px;
+      font-weight: bold;
+      margin: 0 0 6px 0;
+    }
+
+    header h1 {
+      color: #ffffff;
+      font-size: 30px;
+      font-weight: bold;
+      margin: 0 0 8px 0;
+    }
+
+    header p {
+      color: #dbeafe;
+      font-size: 15px;
+      margin: 0;
+    }
+
+    main {
+      display: block;
+      margin: 0;
+      padding: 0;
+    }
+
+    .intro {
+      display: block;
+      color: var(--muted);
+      background-color: var(--card);
+      margin: 0 0 16px 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+    }
+
+    .intro strong {
+      color: var(--deep-blue);
+      font-weight: bold;
+    }
+
+    .section-title {
+      color: var(--deep-blue);
+      font-size: 22px;
+      font-weight: bold;
+      margin: 20px 0 10px 0;
+    }
+
+    .card {
+      display: block;
+      color: var(--ink);
+      background-color: var(--card);
+      margin: 0 0 12px 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+    }
+
+    .card h3 {
+      color: var(--deep-blue);
+      font-size: 18px;
+      font-weight: bold;
+      margin: 0 0 8px 0;
+    }
+
+    .card p {
+      color: var(--ink);
+      font-size: 14px;
+      margin: 0 0 8px 0;
+    }
+
+    .card p:last-child {
+      color: var(--muted);
+      margin-bottom: 0;
+    }
+
+    .blue-card {
+      background-color: var(--soft-blue);
+      border: 2px solid #93c5fd;
+    }
+
+    .teal-card {
+      background-color: var(--soft-teal);
+      border: 2px solid #5eead4;
+    }
+
+    .green-card {
+      background-color: var(--soft-green);
+      border: 2px solid #86efac;
+    }
+
+    .amber-card {
+      background-color: var(--soft-amber);
+      border: 2px solid #fcd34d;
+    }
+
+    .red-card {
+      background-color: var(--soft-red);
+      border: 2px solid #fca5a5;
+    }
+
+    .badge {
+      display: block;
+      color: #ffffff;
+      background-color: var(--blue);
+      font-size: 12px;
+      font-weight: bold;
+      margin: 4px 0;
+      padding: 5px;
+      border: 1px solid var(--deep-blue);
+    }
+
+    .badge.success {
+      background-color: var(--green);
+      border-color: #166534;
+    }
+
+    .badge.warning {
+      color: #422006;
+      background-color: #fbbf24;
+      border-color: var(--amber);
+    }
+
+    .badge.danger {
+      background-color: var(--red);
+      border-color: #7f1d1d;
+    }
+
+    .button {
+      display: block;
+      color: #ffffff;
+      background-color: var(--blue);
+      font-size: 14px;
+      font-weight: bold;
+      margin: 8px 0;
+      padding: 9px;
+      border: 1px solid var(--deep-blue);
+    }
+
+    .button.secondary {
+      color: var(--deep-blue);
+      background-color: #eff6ff;
+      border-color: #93c5fd;
+    }
+
+    .button.positive {
+      background-color: var(--green);
+      border-color: #166534;
+    }
+
+    .button.caution {
+      color: #422006;
+      background-color: #fbbf24;
+      border-color: var(--amber);
+    }
+
+    .button.negative {
+      background-color: var(--red);
+      border-color: #7f1d1d;
+    }
+
+    .list-card {
+      display: block;
+      color: var(--ink);
+      background-color: var(--card);
+      margin: 0 0 12px 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+    }
+
+    ul {
+      color: var(--ink);
+      background-color: #f8fafc;
+      margin: 8px 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+    }
+
+    li {
+      color: var(--ink);
+      margin: 5px 0;
+      padding: 3px;
+    }
+
+    li:first-child {
+      color: var(--teal);
+      font-weight: bold;
+    }
+
+    li:last-child {
+      color: var(--deep-blue);
+    }
+
+    .table-like {
+      display: block;
+      color: var(--ink);
+      background-color: var(--card);
+      margin: 0 0 12px 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+    }
+
+    .table-like p {
+      color: var(--ink);
+      background-color: #f8fafc;
+      margin: 4px 0;
+      padding: 7px;
+      border: 1px solid var(--line);
+    }
+
+    .table-like p:nth-child(odd) {
+      background-color: #eaf1f9;
+    }
+
+    .table-like p:first-child {
+      color: #ffffff;
+      background-color: var(--deep-blue);
+      font-weight: bold;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .large-text {
+      color: var(--deep-blue);
+      font-size: 24px;
+      font-weight: bold;
+    }
+
+    .small-text {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .italic-text {
+      color: var(--teal);
+      font-style: italic;
+    }
+
+    .bold-text {
+      color: var(--deep-blue);
+      font-weight: bold;
+    }
+
+    .accent {
+      color: var(--blue);
+      font-weight: bold;
+    }
+
+    a {
+      color: var(--blue);
+      font-weight: bold;
+    }
+
+    blockquote {
+      display: block;
+      color: var(--deep-blue);
+      background-color: #eff6ff;
+      font-style: italic;
+      margin: 10px 0;
+      padding: 12px;
+      border: 2px solid #93c5fd;
+    }
+
+    pre {
+      display: block;
+      color: #e2e8f0;
+      background-color: #172033;
+      font-family: Monospaced;
+      font-size: 12px;
+      margin: 8px 0;
+      padding: 12px;
+      border: 1px solid #334155;
+    }
+
+    .divider {
+      color: var(--line);
+      background-color: var(--line);
+      margin: 14px 0;
+      border: 1px solid var(--line);
+    }
+
+    .notice {
+      display: block;
+      color: #164e63;
+      background-color: #cffafe;
+      margin: 10px 0;
+      padding: 12px;
+      border: 2px solid #67e8f9;
+    }
+
+    .notice strong {
+      color: #155e75;
+    }
+
+    .hidden-example {
+      display: none;
+    }
+
+    footer {
+      display: block;
+      color: var(--muted);
+      background-color: #e8eef6;
+      font-size: 12px;
+      margin: 18px 0 0 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+    }
+
+    @media screen and (max-width: 700px) {
+      body {
+        padding: 8px;
+      }
+
+      header {
+        padding: 12px;
+      }
+
+      header h1 {
+        font-size: 24px;
+      }
+
+      .card,
+      .list-card,
+      .table-like {
+        padding: 9px;
+      }
+
+      .section-title {
+        font-size: 19px;
+      }
+    }
+
+    @media screen and (min-width: 701px) {
+      .intro {
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="eyebrow">A CSS FEATURE TOUR</span>
+    <h1>Style your page</h1>
+    <p>A colorful, self-contained stylesheet showcase for the custom Java browser.</p>
+  </header>
+
+  <main>
+    <div class="intro">
+      <strong>Welcome!</strong> This page demonstrates CSS custom properties, selector
+      matching, inherited typography, colors, spacing, borders, and responsive media rules.
+      It is intentionally built from simple HTML so it works with the browser's lightweight renderer.
+    </div>
+
+    <h2 class="section-title">Color cards</h2>
+    <section class="card blue-card">
+      <h3>Blue theme</h3>
+      <p>Soft blue surfaces and a crisp border make a calm information panel.</p>
+      <p class="muted">The second paragraph picks up the muted text style.</p>
+    </section>
+    <section class="card teal-card">
+      <h3>Teal theme</h3>
+      <p>Custom properties keep the palette consistent across the page.</p>
+    </section>
+    <section class="card green-card">
+      <h3>Success theme</h3>
+      <p>Use a different background and border color to communicate a positive state.</p>
+    </section>
+    <section class="card amber-card">
+      <h3>Warning theme</h3>
+      <p>Warm colors create a noticeable callout without changing the layout.</p>
+    </section>
+    <section class="card red-card">
+      <h3>Danger theme</h3>
+      <p>Each panel shares the card base and overrides only its own colors.</p>
+    </section>
+
+    <h2 class="section-title">Badges and buttons</h2>
+    <section class="card">
+      <h3>Reusable variants</h3>
+      <span class="badge">DEFAULT BADGE</span>
+      <span class="badge success">SUCCESS BADGE</span>
+      <span class="badge warning">WARNING BADGE</span>
+      <span class="badge danger">DANGER BADGE</span>
+      <div class="button">Primary action</div>
+      <div class="button secondary">Secondary action</div>
+      <div class="button positive">Confirm action</div>
+      <div class="button caution">Review action</div>
+      <div class="button negative">Remove action</div>
+    </section>
+
+    <h2 class="section-title">Selectors and lists</h2>
+    <section class="list-card">
+      <h3>First and last child styling</h3>
+      <ul>
+        <li>First item receives the teal emphasis.</li>
+        <li>Middle items keep the base list style.</li>
+        <li>Last item receives a deep-blue accent.</li>
+      </ul>
+    </section>
+
+    <section class="table-like">
+      <h3>Alternating rows</h3>
+      <p>NAME — STATUS</p>
+      <p>Stylesheet parsing — Ready</p>
+      <p>Custom properties — Ready</p>
+      <p>Responsive rules — Ready</p>
+      <p>Selector matching — Ready</p>
+    </section>
+
+    <h2 class="section-title">Typography and content</h2>
+    <section class="card">
+      <h3>Font styles and sizes</h3>
+      <p class="large-text">Large bold heading text</p>
+      <p class="small-text">Small muted supporting text</p>
+      <p class="italic-text">Italic teal emphasis</p>
+      <p class="bold-text">Bold deep-blue emphasis</p>
+      <p>Combine regular copy with an <span class="accent">accented phrase</span> or a
+        <a href="https://example.com">styled link</a>.</p>
+      <blockquote>“Good design is clear, consistent, and easy to read.”</blockquote>
+      <pre>color: var(--deep-blue);
+background-color: var(--soft-blue);
+border: 1px solid var(--line);</pre>
+    </section>
+
+    <h2 class="section-title">Callouts and visibility</h2>
+    <section class="card">
+      <div class="notice"><strong>Did you know?</strong> CSS variables can be reused in
+        declarations and resolved before the stylesheet is rendered.</div>
+      <p class="divider">A bordered divider-style panel.</p>
+      <p class="hidden-example">This content is hidden by the display property.</p>
+      <p class="muted">The hidden example above should not take up any rendered space.</p>
+    </section>
+  </main>
+
+  <footer>
+    CSS Showcase · Built with the supported styling features of the custom Java browser
+  </footer>
+</body>
+</html>
