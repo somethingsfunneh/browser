@@ -172,28 +172,31 @@ public final class EnginePage extends JComponent {
         }
     }
 
+    /** Draws text tokens while preserving a collapsed space between adjacent words. */
     private void paintText(String raw, Flow flow, String link) {
         if (raw == null || raw.isEmpty()) return;
 
-        final String text = raw.replaceAll("\\s+", " ").trim();
-        if (text.isEmpty()) return;
-
         FontMetrics metrics = flow.g.getFontMetrics();
         int index = 0;
-        int length = text.length();
-        while (index < length) {
-            int end = index;
-            while (end < length && !Character.isWhitespace(text.charAt(end))) {
-                end++;
-            }
-            if (end == index) {
-                index++;
-                continue;
-            }
+        int length = raw.length();
+        int spaceWidth = metrics.charWidth(' ');
 
-            String word = text.substring(index, end);
-            int width = metrics.stringWidth(word);
-            if (flow.hasText && flow.x + width > flow.left + flow.width) {
+        while (index < length) {
+            while (index < length && Character.isWhitespace(raw.charAt(index))) index++;
+            if (index >= length) break;
+
+            int wordStart = index;
+            while (index < length && !Character.isWhitespace(raw.charAt(index))) index++;
+            String word = raw.substring(wordStart, index);
+            int wordWidth = metrics.stringWidth(word);
+
+            // Determine whether this token has following collapsed whitespace.
+            int next = index;
+            while (next < length && Character.isWhitespace(raw.charAt(next))) next++;
+            boolean hasFollowingWord = next < length;
+            int advance = wordWidth + (hasFollowingWord ? spaceWidth : 0);
+
+            if (flow.hasText && flow.x + wordWidth > flow.left + flow.width) {
                 flow.newLine();
             }
 
@@ -201,20 +204,18 @@ public final class EnginePage extends JComponent {
             if (link != null) {
                 flow.g.setColor(new Color(6, 69, 173));
                 flow.g.drawString(word, flow.x, baseline);
-                flow.g.drawLine(flow.x, baseline + 1, flow.x + width, baseline + 1);
-                linkHits.add(new LinkHit(new Rectangle(flow.x, flow.y, width, metrics.getHeight()), link));
+                flow.g.drawLine(flow.x, baseline + 1, flow.x + wordWidth, baseline + 1);
+                linkHits.add(new LinkHit(
+                        new Rectangle(flow.x, flow.y, wordWidth, metrics.getHeight()), link));
             } else {
                 flow.g.setColor(Color.BLACK);
                 flow.g.drawString(word, flow.x, baseline);
             }
 
-            flow.x += width;
+            flow.x += advance;
             flow.lineHeight = Math.max(flow.lineHeight, metrics.getHeight());
             flow.hasText = true;
-            index = end;
-            while (index < length && Character.isWhitespace(text.charAt(index))) {
-                index++;
-            }
+            index = next;
         }
     }
 
