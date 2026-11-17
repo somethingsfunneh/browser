@@ -14,18 +14,21 @@ import java.awt.event.MouseEvent;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-/** Lightweight custom renderer for a deliberately limited HTML/CSS subset. */
+/** Optimized custom renderer for a limited HTML/CSS subset. */
 public final class EnginePage extends JComponent {
     public interface LinkHandler { void open(String url); }
+
+    private static final int DEFAULT_HEIGHT = 600;
+    private static final int MIN_TEXT_WIDTH = 32;
+
     private Dom.Node root;
     private CssEngine css;
     private String baseUrl = "";
     private LinkHandler linkHandler = url -> {};
     private final List<LinkHit> linkHits = new ArrayList<>();
-    private int contentHeight = 600;
+    private int contentHeight = DEFAULT_HEIGHT;
+
     private record LinkHit(Rectangle bounds, String target) {}
 
     public EnginePage() {
@@ -73,41 +76,56 @@ public final class EnginePage extends JComponent {
     @Override protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
         if (root == null) return;
+
         Graphics2D g = (Graphics2D) graphics.create();
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         linkHits.clear();
-        int width = Math.max(100, getWidth() - 32);
-        Flow flow = new Flow(g, 16, 12, width);
+
+        Flow flow = new Flow(g, 16, 12, Math.max(100, getWidth() - 32));
         paintChildren(root, flow, null);
         contentHeight = Math.max(getHeight(), flow.y + flow.lineHeight + 20);
         g.dispose();
     }
 
-    private void paintChildren(Dom.Node parent, Flow flow, String link) {
+    private void paintChildren(Dom.Node parent, Flow flow, String inheritedLink) {
+        if (parent == null || parent.children.isEmpty()) return;
+
         for (Dom.Node node : parent.children) {
             if (node.isText()) {
-                paintText(node.text, flow, link);
+                paintText(node.text, flow, inheritedLink);
                 continue;
             }
+
             String tag = node.tag;
             if (tag.equals("head") || tag.equals("style") || tag.equals("script")
-                    || tag.equals("title") || tag.equals("meta") || tag.equals("link")) continue;
+                    || tag.equals("title") || tag.equals("meta") || tag.equals("link")) {
+                continue;
+            }
 
             CssEngine.Style style = css.compute(node);
             if ("none".equalsIgnoreCase(style.get("display", ""))) continue;
-            if (tag.equals("br")) { flow.newLine(); continue; }
-            if (tag.equals("img")) { paintImagePlaceholder(node, flow, style); continue; }
+            if (tag.equals("br")) {
+                flow.newLine();
+                continue;
+            }
+            if (tag.equals("img")) {
+                paintImagePlaceholder(node, flow, style);
+                continue;
+            }
 
             boolean block = "block".equalsIgnoreCase(
                     style.get("display", Dom.isBlock(tag) ? "block" : "inline"));
             if (block && flow.hasText) flow.newLine();
+
             int margin = style.px("margin", block ? 4 : 0);
             int padding = style.px("padding", 0);
             flow.y += margin;
+
             int boxX = flow.left;
             int contentX = boxX + padding + style.px("padding-left", 0);
-            int boxWidth = Math.max(20, flow.width - padding * 2);
+            int boxWidth = Math.max(MIN_TEXT_WIDTH, flow.width - padding * 2);
             int boxStartY = flow.y;
+
             Font oldFont = flow.g.getFont();
             Color oldColor = flow.g.getColor();
             flow.g.setFont(fontFor(style, oldFont));
@@ -116,12 +134,12 @@ public final class EnginePage extends JComponent {
             Color background = style.color("background-color", style.color("background", null));
             if (background != null && background.getAlpha() > 0) {
                 flow.g.setColor(background);
-                flow.g.fillRect(boxX, boxStartY, boxWidth,
-                        Math.max(24, style.px("height", 24)) + padding * 2);
+                int backgroundHeight = Math.max(24, style.px("height", 24)) + padding * 2;
+                flow.g.fillRect(boxX, boxStartY, boxWidth, backgroundHeight);
                 flow.g.setColor(style.color("color", oldColor));
             }
 
-            String effectiveLink = tag.equals("a") ? resolve(node.attr("href")) : link;
+            String effectiveLink = tag.equals("a") ? resolve(node.attr("href")) : inheritedLink;
             int previousLeft = flow.left;
             int previousWidth = flow.width;
             if (block) {
@@ -132,9 +150,11 @@ public final class EnginePage extends JComponent {
 
             paintChildren(node, flow, effectiveLink);
             if (block && flow.hasText) flow.newLine();
+
             int boxHeight = Math.max(20, flow.y - boxStartY);
             int fixedHeight = style.px("height", -1);
             if (fixedHeight >= 0) boxHeight = fixedHeight;
+
             String border = style.get("border", "");
             if (!border.isBlank() && !border.equalsIgnoreCase("none")) {
                 flow.g.setColor(Color.GRAY);
@@ -154,27 +174,47 @@ public final class EnginePage extends JComponent {
 
     private void paintText(String raw, Flow flow, String link) {
         if (raw == null || raw.isEmpty()) return;
-        String text = raw.replaceAll("\\s+", " ");
-        Matcher matcher = Pattern.compile("\\S+\\s*").matcher(text);
+
+        final String text = raw.replaceAll("\\s+", " ").trim();
+        if (text.isEmpty()) return;
+
         FontMetrics metrics = flow.g.getFontMetrics();
-        while (matcher.find()) {
-            String word = matcher.group();
+        int index = 0;
+        int length = text.length();
+        while (index < length) {
+            int end = index;
+            while (end < length && !Character.isWhitespace(text.charAt(end))) {
+                end++;
+            }
+            if (end == index) {
+                index++;
+                continue;
+            }
+
+            String word = text.substring(index, end);
             int width = metrics.stringWidth(word);
-            if (flow.hasText && flow.x + width > flow.left + flow.width) flow.newLine();
+            if (flow.hasText && flow.x + width > flow.left + flow.width) {
+                flow.newLine();
+            }
+
             int baseline = flow.y + metrics.getAscent();
             if (link != null) {
                 flow.g.setColor(new Color(6, 69, 173));
                 flow.g.drawString(word, flow.x, baseline);
                 flow.g.drawLine(flow.x, baseline + 1, flow.x + width, baseline + 1);
-                linkHits.add(new LinkHit(
-                        new Rectangle(flow.x, flow.y, width, metrics.getHeight()), link));
+                linkHits.add(new LinkHit(new Rectangle(flow.x, flow.y, width, metrics.getHeight()), link));
             } else {
                 flow.g.setColor(Color.BLACK);
                 flow.g.drawString(word, flow.x, baseline);
             }
+
             flow.x += width;
             flow.lineHeight = Math.max(flow.lineHeight, metrics.getHeight());
             flow.hasText = true;
+            index = end;
+            while (index < length && Character.isWhitespace(text.charAt(index))) {
+                index++;
+            }
         }
     }
 
@@ -183,12 +223,15 @@ public final class EnginePage extends JComponent {
                 style.px("width", parseInt(node.attr("width"), 120))));
         int height = Math.max(24, Math.min(480,
                 style.px("height", parseInt(node.attr("height"), 80))));
+
         flow.newLineIfNeeded();
         flow.g.setColor(new Color(238, 238, 238));
         flow.g.fillRect(flow.x, flow.y, width, height);
         flow.g.setColor(Color.GRAY);
         flow.g.drawRect(flow.x, flow.y, width, height);
-        if (!node.attr("alt").isBlank()) flow.g.drawString(node.attr("alt"), flow.x + 6, flow.y + 18);
+        String alt = node.attr("alt");
+        if (!alt.isBlank()) flow.g.drawString(alt, flow.x + 6, flow.y + 18);
+
         flow.y += height + 4;
         flow.x = flow.left;
         flow.hasText = false;
@@ -196,9 +239,14 @@ public final class EnginePage extends JComponent {
 
     private String resolve(String href) {
         if (href == null || href.isBlank() || href.startsWith("#")
-                || href.regionMatches(true, 0, "javascript:", 0, 11)) return null;
-        try { return baseUrl.isBlank() ? href : URI.create(baseUrl).resolve(href).toString(); }
-        catch (Exception ignored) { return href; }
+                || href.regionMatches(true, 0, "javascript:", 0, 11)) {
+            return null;
+        }
+        try {
+            return baseUrl.isBlank() ? href : URI.create(baseUrl).resolve(href).toString();
+        } catch (Exception ignored) {
+            return href;
+        }
     }
 
     private static Font fontFor(CssEngine.Style style, Font inherited) {
@@ -206,14 +254,20 @@ public final class EnginePage extends JComponent {
         int flags = Font.PLAIN;
         if ("bold".equalsIgnoreCase(style.get("font-weight", ""))) flags |= Font.BOLD;
         if ("italic".equalsIgnoreCase(style.get("font-style", ""))) flags |= Font.ITALIC;
+
         String family = style.get("font-family", inherited.getFamily()).split(",")[0]
-                .replace("\"", "").replace("'", "").trim();
+                .replace("\"", "")
+                .replace("'", "")
+                .trim();
         return new Font(family.isBlank() ? inherited.getFamily() : family, flags, size);
     }
 
     private static int parseInt(String value, int fallback) {
-        try { return Integer.parseInt(value.trim()); }
-        catch (Exception ignored) { return fallback; }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     private static void collectStyles(Dom.Node node, StringBuilder out) {
@@ -233,7 +287,7 @@ public final class EnginePage extends JComponent {
     }
 
     private static List<Dom.Node> findAll(Dom.Node node, String tag) {
-        List<Dom.Node> out = new ArrayList<>();
+        ArrayList<Dom.Node> out = new ArrayList<>();
         collect(node, tag, out);
         return out;
     }
