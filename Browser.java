@@ -47,6 +47,9 @@ public class Browser extends JFrame {
     private static final String HOME = "https://www.google.com";
     private static final String SEARCH = "https://www.google.com/search?q=";
     private static final Color CHROME_TOOLBAR = new Color(241, 243, 244);
+    private static final Color CHROME_TAB_STRIP = new Color(222, 225, 230);
+    private static final Color CHROME_INACTIVE_TAB = new Color(211, 214, 219);
+    private static final Color CHROME_BORDER = new Color(218, 220, 224);
     private static final Color CHROME_SURFACE = Color.WHITE;
     private static final Color CHROME_TEXT = new Color(32, 33, 36);
     private static final Color CHROME_MUTED = new Color(95, 99, 104);
@@ -68,7 +71,7 @@ public class Browser extends JFrame {
     private final JLabel status = new JLabel("Ready");
     private final CardLayout viewportLayout = new CardLayout();
     private final JPanel viewport = new JPanel(viewportLayout);
-    private final JPanel tabStrip = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+    private final JPanel tabStrip = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
     private final List<PageState> openTabs = new ArrayList<>();
     private PageState activeTab;
     private int tabCounter;
@@ -105,12 +108,14 @@ public class Browser extends JFrame {
         address.setCaretColor(CHROME_BLUE);
         address.setBackground(CHROME_SURFACE);
         address.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(218, 220, 224)),
+                BorderFactory.createLineBorder(CHROME_BORDER),
                 BorderFactory.createEmptyBorder(7, 12, 7, 12)));
         address.setMargin(new Insets(0, 0, 0, 0));
         address.setToolTipText("Search Google, enter a URL, or try about:demo");
 
-        tabStrip.setOpaque(false);
+        tabStrip.setOpaque(true);
+        tabStrip.setBackground(CHROME_TAB_STRIP);
+        tabStrip.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, CHROME_BORDER));
 
         JPanel rightControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         rightControls.setOpaque(false);
@@ -123,15 +128,11 @@ public class Browser extends JFrame {
         JPanel toolbar = new JPanel(new BorderLayout(8, 0));
         toolbar.setBackground(CHROME_TOOLBAR);
         toolbar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(218, 220, 224)),
+                BorderFactory.createMatteBorder(0, 0, 1, 0, CHROME_BORDER),
                 BorderFactory.createEmptyBorder(6, 10, 6, 10)));
         toolbar.add(navigation, BorderLayout.WEST);
         toolbar.add(address, BorderLayout.CENTER);
         toolbar.add(rightControls, BorderLayout.EAST);
-
-        tabStrip.setBackground(new Color(232, 234, 237));
-        tabStrip.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(218, 220, 224)));
-        tabStrip.setVisible(false);
 
         northContainer.add(tabStrip, BorderLayout.NORTH);
         northContainer.add(toolbar, BorderLayout.SOUTH);
@@ -246,37 +247,35 @@ public class Browser extends JFrame {
 
     private void rebuildTabStrip() {
         tabStrip.removeAll();
-        boolean multiple = openTabs.size() > 1;
-        tabStrip.setVisible(multiple);
-        if (multiple) {
-            for (PageState tab : openTabs) {
-                boolean selected = (tab == activeTab);
-                JPanel pill = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
-                pill.setBackground(selected ? CHROME_SURFACE : new Color(228, 230, 233));
-                pill.setBorder(BorderFactory.createLineBorder(
-                        selected ? CHROME_BLUE : new Color(210, 212, 216), 1, true));
+        for (PageState tab : openTabs) {
+            boolean selected = (tab == activeTab);
+            JPanel pill = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+            pill.setBackground(selected ? CHROME_SURFACE : CHROME_INACTIVE_TAB);
+            pill.setBorder(BorderFactory.createCompoundBorder(
+                    BorderFactory.createMatteBorder(3, 1, 0, 1,
+                            selected ? CHROME_BLUE : CHROME_BORDER),
+                    BorderFactory.createEmptyBorder(2, 7, 3, 5)));
 
-                JButton selectBtn = new JButton(tab.title);
-                selectBtn.setFont(new Font("SansSerif", selected ? Font.BOLD : Font.PLAIN, 11));
-                selectBtn.setForeground(selected ? CHROME_BLUE : CHROME_TEXT);
-                selectBtn.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 2));
-                selectBtn.setContentAreaFilled(false);
-                selectBtn.setFocusPainted(false);
-                selectBtn.addActionListener(e -> selectTab(tab));
+            JButton selectBtn = new JButton(tab.title);
+            selectBtn.setFont(new Font("SansSerif", selected ? Font.PLAIN : Font.PLAIN, 12));
+            selectBtn.setForeground(CHROME_TEXT);
+            selectBtn.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 2));
+            selectBtn.setContentAreaFilled(false);
+            selectBtn.setFocusPainted(false);
+            selectBtn.addActionListener(e -> selectTab(tab));
 
-                JButton closeBtn = new JButton("×");
-                closeBtn.setFont(new Font("SansSerif", Font.PLAIN, 12));
-                closeBtn.setForeground(CHROME_MUTED);
-                closeBtn.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 4));
-                closeBtn.setContentAreaFilled(false);
-                closeBtn.setFocusPainted(false);
-                closeBtn.setToolTipText("Close tab (Ctrl+W)");
-                closeBtn.addActionListener(e -> closeTab(tab));
+            JButton closeBtn = new JButton("×");
+            closeBtn.setFont(new Font("SansSerif", Font.PLAIN, 14));
+            closeBtn.setForeground(CHROME_MUTED);
+            closeBtn.setBorder(BorderFactory.createEmptyBorder(0, 3, 0, 3));
+            closeBtn.setContentAreaFilled(false);
+            closeBtn.setFocusPainted(false);
+            closeBtn.setToolTipText("Close tab (Ctrl+W)");
+            closeBtn.addActionListener(e -> closeTab(tab));
 
-                pill.add(selectBtn);
-                pill.add(closeBtn);
-                tabStrip.add(pill);
-            }
+            pill.add(selectBtn);
+            pill.add(closeBtn);
+            tabStrip.add(pill);
         }
         tabStrip.revalidate();
         tabStrip.repaint();
