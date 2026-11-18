@@ -1,0 +1,100 @@
+package engine;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URLConnection;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Locale;
+
+/** Bounded HTTP(S) fetch helpers for stylesheets, scripts, and images. */
+final class ResourceLoader {
+    private static final int TIMEOUT_MILLIS = 8_000;
+    private static final int MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_REDIRECTS = 4;
+
+    private ResourceLoader() {}
+
+    static String fetch(EnginePage.ResourceBudget budget, String baseUrl, String reference) throws IOException {
+        if (reference == null || reference.isBlank()) return null;
+        URI target = resolve(baseUrl, reference);
+        byte[] bytes = fetchBytes(target, 0, MAX_RESOURCE_BYTES, budget);
+        return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    static byte[] fetchBytes(String baseUrl, String reference, int maxBytes) throws IOException {
+        if (reference == null || reference.isBlank()) return null;
+        String trimmed = reference.trim();
+        if (trimmed.regionMatches(true, 0, "data:", 0, 5)) {
+            int comma = trimmed.indexOf(',');
+            if (comma < 0) return null;
+            String metadata = trimmed.substring(5, comma).toLowerCase(Locale.ROOT);
+            String payload = trimmed.substring(comma + 1);
+            byte[] data = metadata.contains(";base64")
+                    ? Base64.getMimeDecoder().decode(payload)
+                    : java.net.URLDecoder.decode(payload, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8);
+            if (data.length > maxBytes) throw new IOException("Resource size limit reached");
+            return data;
+        }
+        return fetchBytes(resolve(baseUrl, trimmed), 0, Math.min(maxBytes, MAX_RESOURCE_BYTES), null);
+    }
+
+    private static URI resolve(String baseUrl, String reference) throws IOException {
+        try {
+            URI ref = URI.create(reference.trim());
+            if (ref.isAbsolute()) return ref;
+            if (baseUrl == null || baseUrl.isBlank() || baseUrl.startsWith("about:")) {
+                throw new IOException("Relative resource URL has no HTTP base URL");
+            }
+            return URI.create(baseUrl).resolve(ref);
+        } catch (IllegalArgumentException ex) {
+            throw new IOException("Invalid resource URL", ex);
+        }
+    }
+
+    private static byte[] fetchBytes(URI target, int redirects, int maxBytes,
+                                     EnginePage.ResourceBudget budget) throws IOException {
+        String scheme = target.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            throw new IOException("Only HTTP and HTTPS page resources are supported");
+        }
+        if (redirects > MAX_REDIRECTS) throw new IOException("Too many resource redirects");
+        if (budget != null) budget.startResource();
+        URLConnection connection = target.toURL().openConnection();
+        connection.setConnectTimeout(TIMEOUT_MILLIS);
+        connection.setReadTimeout(TIMEOUT_MILLIS);
+        connection.setRequestProperty("User-Agent", "CustomJavaBrowser/1.0");
+        connection.setRequestProperty("Accept", "text/css,application/javascript,text/javascript,image/*,*/*;q=0.1");
+        if (connection instanceof HttpURLConnection http) {
+            http.setInstanceFollowRedirects(false);
+            int status = http.getResponseCode();
+            if (status >= 300 && status < 400) {
+                String location = http.getHeaderField("Location");
+                http.disconnect();
+                return location == null || location.isBlank()
+                        ? null : fetchBytes(target.resolve(location), redirects + 1, maxBytes, budget);
+            }
+            if (status < 200 || status >= 300) {
+                http.disconnect();
+                return null;
+            }
+        }
+        try (InputStream input = connection.getInputStream();
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            int total = 0;
+            while ((count = input.read(buffer)) != -1) {
+                total += count;
+                if (total > maxBytes) throw new IOException("Resource size limit reached");
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        } finally {
+            if (connection instanceof HttpURLConnection http) http.disconnect();
+        }
+    }
+}
