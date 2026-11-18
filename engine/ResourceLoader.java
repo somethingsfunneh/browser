@@ -9,17 +9,38 @@ import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Locale;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 /** Bounded HTTP(S) fetch helpers for stylesheets, scripts, and images. */
 final class ResourceLoader {
     private static final int TIMEOUT_MILLIS = 8_000;
     private static final int MAX_RESOURCE_BYTES = 8 * 1024 * 1024;
+    private static final int MAX_PAGE_BYTES = 2 * 1024 * 1024;
+    private static final int MAX_RESOURCES = 32;
     private static final int MAX_REDIRECTS = 4;
+    private static final Map<Object, Budget> PAGE_BUDGETS = new WeakHashMap<>();
+
+    private static final class Budget {
+        private int resources;
+        private int bytes;
+
+        synchronized void startResource() throws IOException {
+            if (++resources > MAX_RESOURCES) throw new IOException("Page resource limit reached");
+        }
+
+        synchronized void addBytes(int count) throws IOException {
+            bytes += count;
+            if (bytes > MAX_PAGE_BYTES) throw new IOException("Page resource size limit reached");
+        }
+    }
 
     private ResourceLoader() {}
 
-    static String fetch(EnginePage.ResourceBudget budget, String baseUrl, String reference) throws IOException {
+    /** The token associates stylesheet/script requests with the page's shared resource budget. */
+    static String fetch(Object pageBudget, String baseUrl, String reference) throws IOException {
         if (reference == null || reference.isBlank()) return null;
+        Budget budget = budgetFor(pageBudget);
         URI target = resolve(baseUrl, reference);
         byte[] bytes = fetchBytes(target, 0, MAX_RESOURCE_BYTES, budget);
         return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
@@ -42,6 +63,11 @@ final class ResourceLoader {
         return fetchBytes(resolve(baseUrl, trimmed), 0, Math.min(maxBytes, MAX_RESOURCE_BYTES), null);
     }
 
+    private static synchronized Budget budgetFor(Object token) {
+        if (token == null) return new Budget();
+        return PAGE_BUDGETS.computeIfAbsent(token, ignored -> new Budget());
+    }
+
     private static URI resolve(String baseUrl, String reference) throws IOException {
         try {
             URI ref = URI.create(reference.trim());
@@ -55,8 +81,7 @@ final class ResourceLoader {
         }
     }
 
-    private static byte[] fetchBytes(URI target, int redirects, int maxBytes,
-                                     EnginePage.ResourceBudget budget) throws IOException {
+    private static byte[] fetchBytes(URI target, int redirects, int maxBytes, Budget budget) throws IOException {
         String scheme = target.getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
             throw new IOException("Only HTTP and HTTPS page resources are supported");
@@ -82,14 +107,14 @@ final class ResourceLoader {
                 return null;
             }
         }
-        try (InputStream input = connection.getInputStream();
-             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+        try (InputStream input = connection.getInputStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
             int count;
             int total = 0;
             while ((count = input.read(buffer)) != -1) {
                 total += count;
                 if (total > maxBytes) throw new IOException("Resource size limit reached");
+                if (budget != null) budget.addBytes(count);
                 output.write(buffer, 0, count);
             }
             return output.toByteArray();
