@@ -24,11 +24,9 @@ final class ResourceLoader {
     private static final class Budget {
         private int resources;
         private int bytes;
-
         synchronized void startResource() throws IOException {
             if (++resources > MAX_RESOURCES) throw new IOException("Page resource limit reached");
         }
-
         synchronized void addBytes(int count) throws IOException {
             bytes += count;
             if (bytes > MAX_PAGE_BYTES) throw new IOException("Page resource size limit reached");
@@ -37,12 +35,10 @@ final class ResourceLoader {
 
     private ResourceLoader() {}
 
-    /** The token associates stylesheet/script requests with the page's shared resource budget. */
+    /** The token associates stylesheet/script requests with the caller's page budget. */
     static String fetch(Object pageBudget, String baseUrl, String reference) throws IOException {
         if (reference == null || reference.isBlank()) return null;
-        Budget budget = budgetFor(pageBudget);
-        URI target = resolve(baseUrl, reference);
-        byte[] bytes = fetchBytes(target, 0, MAX_RESOURCE_BYTES, budget);
+        byte[] bytes = fetchBytes(resolve(baseUrl, reference), 0, MAX_RESOURCE_BYTES, budgetFor(pageBudget));
         return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
     }
 
@@ -99,8 +95,8 @@ final class ResourceLoader {
             if (status >= 300 && status < 400) {
                 String location = http.getHeaderField("Location");
                 http.disconnect();
-                return location == null || location.isBlank()
-                        ? null : fetchBytes(target.resolve(location), redirects + 1, maxBytes, budget);
+                return location == null || location.isBlank() ? null
+                        : fetchBytes(target.resolve(location), redirects + 1, maxBytes, budget);
             }
             if (status < 200 || status >= 300) {
                 http.disconnect();
@@ -109,8 +105,7 @@ final class ResourceLoader {
         }
         try (InputStream input = connection.getInputStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
-            int count;
-            int total = 0;
+            int count, total = 0;
             while ((count = input.read(buffer)) != -1) {
                 total += count;
                 if (total > maxBytes) throw new IOException("Resource size limit reached");
